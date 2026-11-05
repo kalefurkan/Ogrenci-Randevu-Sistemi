@@ -8,7 +8,7 @@ const auth = () => ({ Authorization: "Bearer " + token });
 function logout() {
   token = null;
   try { sessionStorage.removeItem(TK); } catch {}
-  $("#panel").classList.add("hidden"); $("#login").classList.remove("hidden");
+  $("#panel").classList.add("hidden"); $("#pwchange").classList.add("hidden"); $("#login").classList.remove("hidden");
 }
 
 $("#login-form").addEventListener("submit", async (ev) => {
@@ -21,6 +21,27 @@ $("#login-form").addEventListener("submit", async (ev) => {
     token = r.token;
     try { sessionStorage.setItem(TK, token); } catch {}
     $("#l-pass").value = "";
+    if (r.mustChange) showPwChange(); else load();
+  } catch (e) { err.append(el("div", { class: "err", text: e.message })); }
+});
+function showPwChange() {
+  $("#login").classList.add("hidden"); $("#panel").classList.add("hidden"); $("#pwchange").classList.remove("hidden");
+  $("#pw1").focus();
+}
+$("#pw-cancel").onclick = () => { $("#pwchange").classList.add("hidden"); logout(); };
+$("#pw-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const err = $("#pw-err"); err.replaceChildren();
+  const p1 = $("#pw1").value, p2 = $("#pw2").value;
+  if (p1.length < 8) { err.append(el("div", { class: "err", text: "Şifre en az 8 karakter olmalı." })); return; }
+  if (p1 !== p2) { err.append(el("div", { class: "err", text: "Şifreler aynı değil." })); return; }
+  try {
+    const r = await api("/api/teacher/password", { method: "POST", headers: auth(), body: JSON.stringify({ newPassword: p1 }) });
+    token = r.token;
+    try { sessionStorage.setItem(TK, token); } catch {}
+    $("#pw1").value = ""; $("#pw2").value = "";
+    $("#pwchange").classList.add("hidden");
+    toast("Şifren güncellendi. Bundan sonra bu şifreyle giriş yapacaksın.", true);
     load();
   } catch (e) { err.append(el("div", { class: "err", text: e.message })); }
 });
@@ -113,7 +134,8 @@ async function load() {
       section("Geçmiş / sonlanmış", past, "Kayıt yok.")
     );
   } catch (e) {
-    if (e.status === 401) logout(); else toast(e.message);
+    if (e.status === 403) showPwChange();
+    else if (e.status === 401) logout(); else toast(e.message);
   }
 }
 

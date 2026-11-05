@@ -32,6 +32,19 @@
     </form>
   </section>
 
+  <section id="pwchange" class="card hidden">
+    <h2>Yeni şifre belirle</h2>
+    <p class="hint">İlk girişin için sana verilen şifre geçicidir. Lütfen kendi şifreni belirle; bundan sonra bu şifreyle giriş yapacaksın ve tekrar sorulmayacak.</p>
+    <form id="pw-form" novalidate>
+      <label for="pw1">Yeni şifre (en az 8 karakter)</label>
+      <input id="pw1" type="password" autocomplete="new-password" minlength="8">
+      <label for="pw2">Yeni şifre (tekrar)</label>
+      <input id="pw2" type="password" autocomplete="new-password" minlength="8">
+      <div id="pw-err"></div>
+      <div class="row"><button class="btn" type="submit">Şifreyi kaydet</button><button class="btn ghost" type="button" id="pw-cancel">Vazgeç</button></div>
+    </form>
+  </section>
+
   <section id="panel" class="hidden">
     <div class="row" style="justify-content:space-between;margin:0 0 12px">
       <strong id="who"></strong>

@@ -101,12 +101,18 @@ function safeEqual(a, b) {
   return r === 0;
 }
 
-async function makeToken(env, teacher) {
-  const payload = b64url(new TextEncoder().encode(JSON.stringify({ t: teacher, exp: Date.now() + 12 * 3600 * 1000 })));
+async function pbkdf2(password, saltB64) {
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"]);
+  const salt = Uint8Array.from(atob(saltB64.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
+  return b64url(await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt, iterations: 100000 }, key, 256));
+}
+
+async function makeToken(env, teacher, mustChange) {
+  const payload = b64url(new TextEncoder().encode(JSON.stringify({ t: teacher, mc: mustChange ? 1 : 0, exp: Date.now() + 12 * 3600 * 1000 })));
   return payload + "." + (await hmac(env.TOKEN_SECRET, payload));
 }
 
-async function requireTeacher(request, env) {
+async function requireTeacher(request, env, allowMustChange) {
   const auth = request.headers.get("Authorization") || "";
   const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
   const [payload, sig] = token.split(".");
@@ -117,6 +123,7 @@ async function requireTeacher(request, env) {
     data = JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(payload.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0))));
   } catch { throw new HttpError(401, "Geçersiz oturum."); }
   if (!data.exp || data.exp < Date.now() || !TEACHERS[data.t]) throw new HttpError(401, "Oturum süresi doldu.");
+  if (data.mc && !allowMustChange) throw new HttpError(403, "Önce yeni şifre belirlemelisiniz.");
   return data.t;
 }
 
@@ -330,12 +337,41 @@ async function handle(request, env) {
     try { b = await request.json(); } catch { throw new HttpError(400, "Geçersiz istek."); }
     const teacher = clean(b.teacher, 20);
     const password = String(b.password ?? "");
-    const secret = teacher === "furkan" ? env.FURKAN_PASSWORD : teacher === "mustafa" ? env.MUSTAFA_PASSWORD : null;
-    if (!secret || !env.TOKEN_SECRET || !safeEqual(password, secret)) {
+    const initial = teacher === "furkan" ? env.FURKAN_PASSWORD : teacher === "mustafa" ? env.MUSTAFA_PASSWORD : null;
+    if (!initial || !env.TOKEN_SECRET) throw new HttpError(401, "Öğretmen veya şifre hatalı.");
+    const cred = await env.DB.prepare("SELECT salt, hash FROM teacher_credentials WHERE teacher = ?").bind(teacher).first();
+    // Şifre belirlendikten sonra yalnızca güncel şifre geçerli; ilk şifre artık çalışmaz.
+    const ok = cred ? safeEqual(await pbkdf2(password, cred.salt), cred.hash) : safeEqual(password, initial);
+    if (!ok) {
       await new Promise((r) => setTimeout(r, 600));
       throw new HttpError(401, "Öğretmen veya şifre hatalı.");
     }
-    return json({ token: await makeToken(env, teacher), teacher, teacherName: TEACHERS[teacher].name }, 200, cors);
+    const mustChange = !cred;
+    return json({ token: await makeToken(env, teacher, mustChange), teacher, teacherName: TEACHERS[teacher].name, mustChange }, 200, cors);
+  }
+
+  // Öğretmen: yeni şifre belirle (ilk girişte zorunlu)
+  if (path === "/api/teacher/password" && method === "POST") {
+    const teacher = await requireTeacher(request, env, true);
+    let b;
+    try { b = await request.json(); } catch { throw new HttpError(400, "Geçersiz istek."); }
+    const pw = String(b.newPassword ?? "");
+    if (pw.length < 8) throw new HttpError(400, "Yeni şifre en az 8 karakter olmalı.");
+    if (pw.length > 100) throw new HttpError(400, "Şifre çok uzun.");
+    const initial = teacher === "furkan" ? env.FURKAN_PASSWORD : env.MUSTAFA_PASSWORD;
+    if (safeEqual(pw, initial)) throw new HttpError(400, "Yeni şifre, ilk verilen şifreyle aynı olamaz.");
+    const cred = await env.DB.prepare("SELECT salt, hash FROM teacher_credentials WHERE teacher = ?").bind(teacher).first();
+    if (cred) {
+      // Şifre zaten belirlenmişse eski şifre de istenir
+      const cur = String(b.currentPassword ?? "");
+      if (!safeEqual(await pbkdf2(cur, cred.salt), cred.hash)) throw new HttpError(401, "Mevcut şifre hatalı.");
+    }
+    const salt = b64url(crypto.getRandomValues(new Uint8Array(16)));
+    const hash = await pbkdf2(pw, salt);
+    await env.DB.prepare(
+      "INSERT INTO teacher_credentials (teacher, salt, hash, updated_at) VALUES (?,?,?,?) ON CONFLICT(teacher) DO UPDATE SET salt = excluded.salt, hash = excluded.hash, updated_at = excluded.updated_at"
+    ).bind(teacher, salt, hash, new Date().toISOString()).run();
+    return json({ token: await makeToken(env, teacher, false), teacherName: TEACHERS[teacher].name }, 200, cors);
   }
 
   // Öğretmen: randevu listesi
