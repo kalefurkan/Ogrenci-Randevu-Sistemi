@@ -3,7 +3,6 @@
 const SLOT_MINUTES = 15;      // Her randevunun süresi
 const HORIZON_DAYS = 14;      // Bugünden itibaren kaç gün ilerisi için randevu alınabilir
 const MAX_ACTIVE_PER_STUDENT = 2;
-const MAX_MINUTES = 60;       // Tek randevunun en uzun süresi
 
 // Gün numaraları: 0=Pazar, 1=Pazartesi ... 6=Cumartesi
 const TEACHERS = {
@@ -175,18 +174,32 @@ async function handle(request, env) {
     if (!TEACHERS[teacher]) throw new HttpError(400, "Öğretmen bulunamadı.");
     const dates = horizonDates();
     const { results } = await env.DB.prepare(
-      "SELECT date, time, end_time FROM appointments WHERE teacher = ? AND date >= ? AND date <= ? AND status IN ('pending','approved')"
+      "SELECT id, date, time, end_time, student_name, student_class, status FROM appointments WHERE teacher = ? AND date >= ? AND date <= ? AND status IN ('pending','approved')"
     ).bind(teacher, dates[0], dates[dates.length - 1]).all();
+    const parts = await env.DB.prepare(
+      `SELECT p.appointment_id, p.student_name, p.student_class FROM participants p
+       JOIN appointments a ON a.id = p.appointment_id
+       WHERE a.teacher = ? AND a.date >= ? AND a.date <= ? AND a.status IN ('pending','approved') AND p.status = 'approved'`
+    ).bind(teacher, dates[0], dates[dates.length - 1]).all();
+    const endOf = (r) => r.end_time || fromMin(toMin(r.time) + SLOT_MINUTES);
     const days = [];
     for (const date of dates) {
       const slots = slotsFor(teacher, date);
       if (!slots.length) continue;
       const booked = results.filter((r) => r.date === date);
-      const isTaken = (time) => booked.some((r) => r.time <= time && time < (r.end_time || fromMin(toMin(r.time) + SLOT_MINUTES)));
+      const findBooking = (time) => booked.find((r) => r.time <= time && time < endOf(r));
       const list = slots
         .filter((time) => !isPast(date, time))
-        .map((time) => ({ time, available: !isTaken(time) }));
-      if (list.length) days.push({ date, dayName: DAY_NAMES[dayOfWeek(date)], slots: list });
+        .map((time) => {
+          const bk = findBooking(time);
+          return bk ? { time, available: false, bookingId: bk.id } : { time, available: true };
+        });
+      const bookings = booked.map((r) => ({
+        id: r.id, time: r.time, endTime: endOf(r), studentName: r.student_name, studentClass: r.student_class,
+        status: r.status, past: isPast(date, r.time),
+        participants: parts.results.filter((p) => p.appointment_id === r.id).map((p) => ({ name: p.student_name, studentClass: p.student_class })),
+      }));
+      if (list.length) days.push({ date, dayName: DAY_NAMES[dayOfWeek(date)], slots: list, bookings });
     }
     return json({ teacher, teacherName: TEACHERS[teacher].name, slotMinutes: SLOT_MINUTES, days }, 200, cors);
   }
@@ -213,7 +226,6 @@ async function handle(request, env) {
     const start = toMin(time), end = toMin(endTime || "99:99");
     if (!/^\d\d:\d\d$/.test(time) || !/^\d\d:\d\d$/.test(endTime) || end <= start || (end - start) % SLOT_MINUTES !== 0)
       throw new HttpError(400, "Saat aralığı geçersiz.");
-    if (end - start > MAX_MINUTES) throw new HttpError(400, "Bir randevu en fazla " + MAX_MINUTES + " dakika olabilir.");
     for (let m = start; m < end; m += SLOT_MINUTES)
       if (!daySlots.includes(fromMin(m))) throw new HttpError(400, "Seçilen saat aralığı öğretmenin çalışma saatleri dışında.");
 
@@ -245,21 +257,70 @@ async function handle(request, env) {
     return json({ code }, 201, cors);
   }
 
-  // Öğrenci: randevu durumu
-  let m = path.match(/^\/api\/appointments\/([A-Z0-9]{8})$/i);
-  if (m && method === "GET") {
-    const r = await env.DB.prepare("SELECT * FROM appointments WHERE code = ?").bind(m[1].toUpperCase()).first();
-    if (!r) throw new HttpError(404, "Bu koda ait randevu bulunamadı.");
-    return json(publicView(r), 200, cors);
+  // Katılım isteği oluştur
+  let m = path.match(/^\/api\/appointments\/([0-9a-f-]{36})\/join$/);
+  if (m && method === "POST") {
+    let b;
+    try { b = await request.json(); } catch { throw new HttpError(400, "Geçersiz istek."); }
+    const name = clean(b.name, 60), cls = clean(b.studentClass, 20), reason = clean(b.reason, 500);
+    if (name.split(" ").length < 2 || name.length < 5) throw new HttpError(400, "Lütfen ad ve soyadınızı eksiksiz yazın.");
+    if (!cls) throw new HttpError(400, "Sınıf bilgisi zorunludur.");
+    if (reason.length < 5) throw new HttpError(400, "Katılma nedenini kısaca yazın.");
+    const a = await env.DB.prepare("SELECT * FROM appointments WHERE id = ?").bind(m[1]).first();
+    if (!a || !["pending", "approved"].includes(a.status)) throw new HttpError(404, "Bu randevu artık geçerli değil.");
+    if (isPast(a.date, a.time)) throw new HttpError(400, "Bu randevunun saati geçti.");
+    const same = (n, c) => n.toLowerCase() === name.toLowerCase() && c.toLowerCase() === cls.toLowerCase();
+    if (same(a.student_name, a.student_class)) throw new HttpError(400, "Bu randevu zaten sizin.");
+    const { results: ex } = await env.DB.prepare(
+      "SELECT student_name, student_class FROM participants WHERE appointment_id = ? AND status IN ('pending','approved')"
+    ).bind(a.id).all();
+    if (ex.some((p) => same(p.student_name, p.student_class))) throw new HttpError(409, "Bu randevu için zaten bir katılım isteğiniz var.");
+    const now = new Date().toISOString();
+    const code = newCode();
+    await env.DB.prepare(
+      "INSERT INTO participants (id, code, appointment_id, student_name, student_class, reason, status, created_at, updated_at) VALUES (?,?,?,?,?,?, 'pending', ?, ?)"
+    ).bind(crypto.randomUUID(), code, a.id, name, cls, reason, now, now).run();
+    return json({ code }, 201, cors);
   }
 
-  // Öğrenci: iptal
+  // Öğrenci: durum (randevu kodu veya katılım kodu)
+  m = path.match(/^\/api\/appointments\/([A-Z0-9]{8})$/i);
+  if (m && method === "GET") {
+    const code = m[1].toUpperCase();
+    const r = await env.DB.prepare("SELECT * FROM appointments WHERE code = ?").bind(code).first();
+    if (r) {
+      const { results } = await env.DB.prepare(
+        "SELECT student_name, student_class FROM participants WHERE appointment_id = ? AND status = 'approved' ORDER BY created_at"
+      ).bind(r.id).all();
+      const { n } = await env.DB.prepare("SELECT COUNT(*) AS n FROM participants WHERE appointment_id = ? AND status = 'pending'").bind(r.id).first();
+      return json({ ...publicView(r), kind: "owner", participants: results.map((p) => ({ name: p.student_name, studentClass: p.student_class })), pendingJoinCount: n }, 200, cors);
+    }
+    const p = await env.DB.prepare(
+      `SELECT p.*, a.teacher, a.date, a.time, a.end_time, a.student_name AS owner_name, a.student_class AS owner_class, a.status AS appt_status
+       FROM participants p JOIN appointments a ON a.id = p.appointment_id WHERE p.code = ?`
+    ).bind(code).first();
+    if (!p) throw new HttpError(404, "Bu koda ait randevu bulunamadı.");
+    return json({ ...publicView(p), kind: "join", ownerName: p.owner_name, ownerClass: p.owner_class, appointmentStatus: p.appt_status }, 200, cors);
+  }
+
+  // Öğrenci: iptal (randevu veya katılım isteği)
   m = path.match(/^\/api\/appointments\/([A-Z0-9]{8})\/cancel$/i);
   if (m && method === "POST") {
-    const r = await env.DB.prepare("SELECT * FROM appointments WHERE code = ?").bind(m[1].toUpperCase()).first();
-    if (!r) throw new HttpError(404, "Randevu bulunamadı.");
-    if (!["pending", "approved"].includes(r.status)) throw new HttpError(400, "Bu randevu zaten sonlanmış.");
-    await env.DB.prepare("UPDATE appointments SET status = 'cancelled', updated_at = ? WHERE id = ?").bind(new Date().toISOString(), r.id).run();
+    const code = m[1].toUpperCase();
+    const now = new Date().toISOString();
+    const r = await env.DB.prepare("SELECT * FROM appointments WHERE code = ?").bind(code).first();
+    if (r) {
+      if (!["pending", "approved"].includes(r.status)) throw new HttpError(400, "Bu randevu zaten sonlanmış.");
+      await env.DB.batch([
+        env.DB.prepare("UPDATE appointments SET status = 'cancelled', updated_at = ? WHERE id = ?").bind(now, r.id),
+        env.DB.prepare("UPDATE participants SET status = 'cancelled', teacher_note = 'Randevu sahibi randevuyu iptal etti.', updated_at = ? WHERE appointment_id = ? AND status IN ('pending','approved')").bind(now, r.id),
+      ]);
+      return json({ ok: true }, 200, cors);
+    }
+    const p = await env.DB.prepare("SELECT * FROM participants WHERE code = ?").bind(code).first();
+    if (!p) throw new HttpError(404, "Randevu bulunamadı.");
+    if (!["pending", "approved"].includes(p.status)) throw new HttpError(400, "Bu istek zaten sonlanmış.");
+    await env.DB.prepare("UPDATE participants SET status = 'cancelled', updated_at = ? WHERE id = ?").bind(now, p.id).run();
     return json({ ok: true }, 200, cors);
   }
 
@@ -284,7 +345,16 @@ async function handle(request, env) {
     const { results } = await env.DB.prepare(
       "SELECT * FROM appointments WHERE teacher = ? AND date >= ? ORDER BY date, time"
     ).bind(teacher, from).all();
-    return json({ teacherName: TEACHERS[teacher].name, appointments: results.map(publicView).map((v, i) => ({ ...v, id: results[i].id })) }, 200, cors);
+    const { results: pr } = await env.DB.prepare(
+      "SELECT p.* FROM participants p JOIN appointments a ON a.id = p.appointment_id WHERE a.teacher = ? AND a.date >= ? ORDER BY p.created_at"
+    ).bind(teacher, from).all();
+    const appointments = results.map((r) => ({
+      ...publicView(r), id: r.id,
+      participants: pr.filter((p) => p.appointment_id === r.id).map((p) => ({
+        id: p.id, name: p.student_name, studentClass: p.student_class, reason: p.reason, status: p.status, teacherNote: p.teacher_note || "",
+      })),
+    }));
+    return json({ teacherName: TEACHERS[teacher].name, appointments }, 200, cors);
   }
 
   // Öğretmen: onayla / reddet / iptal
@@ -298,8 +368,33 @@ async function handle(request, env) {
     const note = clean(b.note, 300);
     const r = await env.DB.prepare("SELECT * FROM appointments WHERE id = ? AND teacher = ?").bind(m[1], teacher).first();
     if (!r) throw new HttpError(404, "Randevu bulunamadı.");
-    await env.DB.prepare("UPDATE appointments SET status = ?, teacher_note = ?, updated_at = ? WHERE id = ?")
-      .bind(status, note || null, new Date().toISOString(), r.id).run();
+    const now = new Date().toISOString();
+    const stmts = [env.DB.prepare("UPDATE appointments SET status = ?, teacher_note = ?, updated_at = ? WHERE id = ?").bind(status, note || null, now, r.id)];
+    if (status !== "approved") {
+      stmts.push(env.DB.prepare(
+        "UPDATE participants SET status = 'cancelled', teacher_note = 'Ana randevu iptal edildi veya reddedildi.', updated_at = ? WHERE appointment_id = ? AND status IN ('pending','approved')"
+      ).bind(now, r.id));
+    }
+    await env.DB.batch(stmts);
+    return json({ ok: true }, 200, cors);
+  }
+
+  // Öğretmen: katılım isteğini onayla / reddet / çıkar
+  m = path.match(/^\/api\/teacher\/participants\/([0-9a-f-]{36})$/);
+  if (m && method === "POST") {
+    const teacher = await requireTeacher(request, env);
+    let b;
+    try { b = await request.json(); } catch { throw new HttpError(400, "Geçersiz istek."); }
+    const status = clean(b.status, 20);
+    if (!["approved", "rejected", "cancelled"].includes(status)) throw new HttpError(400, "Geçersiz durum.");
+    const note = clean(b.note, 300);
+    const p = await env.DB.prepare(
+      "SELECT p.id, a.status AS appt_status FROM participants p JOIN appointments a ON a.id = p.appointment_id WHERE p.id = ? AND a.teacher = ?"
+    ).bind(m[1], teacher).first();
+    if (!p) throw new HttpError(404, "İstek bulunamadı.");
+    if (status === "approved" && !["pending", "approved"].includes(p.appt_status)) throw new HttpError(400, "Ana randevu geçerli değil.");
+    await env.DB.prepare("UPDATE participants SET status = ?, teacher_note = ?, updated_at = ? WHERE id = ?")
+      .bind(status, note || null, new Date().toISOString(), p.id).run();
     return json({ ok: true }, 200, cors);
   }
 

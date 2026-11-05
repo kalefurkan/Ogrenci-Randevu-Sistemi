@@ -38,6 +38,32 @@ async function act(a, status) {
   } catch (e) { toast(e.message); if (e.status === 401) logout(); }
 }
 
+async function actPart(p, status) {
+  let note = "";
+  if (status === "rejected") { note = prompt("Öğrenciye iletilecek kısa not (isteğe bağlı):") ?? null; if (note === null) return; }
+  if (status === "cancelled" && !confirm("Bu öğrenciyi randevudan çıkarmak istiyor musunuz?")) return;
+  try {
+    await api("/api/teacher/participants/" + p.id, { method: "POST", headers: auth(), body: JSON.stringify({ status, note }) });
+    toast(status === "approved" ? "Katılım onaylandı, randevu güncellendi." : "Katılım isteği güncellendi.", true);
+    load();
+  } catch (e) { toast(e.message); if (e.status === 401) logout(); }
+}
+
+function partRow(p) {
+  const btns = [];
+  if (p.status === "pending") {
+    btns.push(el("button", { class: "btn ok sm", type: "button", onclick: () => actPart(p, "approved") }, "Katılımı onayla"));
+    btns.push(el("button", { class: "btn ghost sm", type: "button", onclick: () => actPart(p, "rejected") }, "Reddet"));
+  } else if (p.status === "approved") {
+    btns.push(el("button", { class: "btn ghost sm", type: "button", onclick: () => actPart(p, "cancelled") }, "Çıkar"));
+  }
+  return el("div", { class: "note" },
+    el("strong", { text: `${p.name} (${p.studentClass}) ` }), el("span", { class: "badge " + p.status, text: STATUS[p.status] }),
+    el("div", { text: p.reason }),
+    p.teacherNote ? el("div", { class: "meta", text: "Not: " + p.teacherNote }) : null,
+    btns.length ? el("div", { class: "row", style: "margin-top:6px" }, ...btns) : null);
+}
+
 function card(a) {
   const btns = [];
   if (a.status === "pending") {
@@ -46,6 +72,9 @@ function card(a) {
   } else if (a.status === "approved") {
     btns.push(el("button", { class: "btn ghost sm", type: "button", onclick: () => act(a, "cancelled") }, "İptal et"));
   }
+  const parts = (a.participants || []).filter((p) => ["pending", "approved"].includes(p.status));
+  const done = (a.participants || []).filter((p) => !["pending", "approved"].includes(p.status));
+  const approved = parts.filter((p) => p.status === "approved");
   return el("div", { class: "appt " + a.status },
     el("div", { class: "top" },
       el("strong", { text: `${fmtDate(a.date)} · ${fmtRange(a.time, a.endTime)}` }),
@@ -53,6 +82,10 @@ function card(a) {
     el("div", { class: "meta", text: `${a.studentName} · ${a.studentClass}` }),
     el("p", { text: a.reason }),
     a.teacherNote ? el("div", { class: "note", text: "Not: " + a.teacherNote }) : null,
+    approved.length ? el("div", { class: "note" }, el("strong", { text: "Katılanlar: " }), approved.map((p) => `${p.name} (${p.studentClass})`).join(", ")) : null,
+    parts.length ? el("h4", { style: "margin:10px 0 4px", text: "Katılım istekleri" }) : null,
+    ...parts.map(partRow),
+    done.length ? el("div", { class: "meta", style: "margin-top:8px", text: "Sonlanan istekler: " + done.map((p) => `${p.name} (${STATUS[p.status]})`).join(", ") }) : null,
     btns.length ? el("div", { class: "row", style: "margin-top:10px" }, ...btns) : null
   );
 }
@@ -70,11 +103,12 @@ async function load() {
     $("#who").textContent = r.teacherName;
     const today = new Date(Date.now() + 3 * 3600e3).toISOString().slice(0, 10);
     const A = r.appointments;
-    const pending = A.filter((a) => a.status === "pending");
+    const hasPendingJoin = (a) => (a.participants || []).some((p) => p.status === "pending");
+    const pending = A.filter((a) => a.status === "pending" || (a.status === "approved" && a.date >= today && hasPendingJoin(a)));
     const upcoming = A.filter((a) => a.status === "approved" && a.date >= today);
     const past = A.filter((a) => !pending.includes(a) && !upcoming.includes(a)).reverse();
     $("#lists").replaceChildren(
-      section("Onay bekleyenler", pending, "Bekleyen talep yok."),
+      section("Onay bekleyenler (randevu / katılım isteği)", pending, "Bekleyen talep yok."),
       section("Onaylı yaklaşan randevular", upcoming, "Yaklaşan onaylı randevu yok."),
       section("Geçmiş / sonlanmış", past, "Kayıt yok.")
     );

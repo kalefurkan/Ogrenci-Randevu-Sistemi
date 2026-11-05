@@ -1,7 +1,7 @@
 // Öğrenci tarafı
 const $ = (s) => document.querySelector(s);
 const state = { schedule: null, teacher: null, avail: null, date: null, time: null, end: null };
-const MAX_MIN = 60; // sunucudaki üst sınırla aynı
+state.view = null; state.joinDone = null;
 
 /* ---------- sekmeler ---------- */
 function showTab(name) {
@@ -74,7 +74,7 @@ function renderTime() {
     const [, m, dd] = d.date.split("-");
     return el("button", {
       class: "chip", type: "button", "aria-pressed": d.date === state.date,
-      onclick: () => { state.date = d.date; state.time = null; state.end = null; renderTime(); },
+      onclick: () => { state.date = d.date; state.time = null; state.end = null; state.view = null; renderTime(); },
     }, `${Number(dd)}.${m}`, el("small", { text: d.dayName }));
   });
   const slots = day.slots;
@@ -85,8 +85,9 @@ function renderTime() {
     const inRange = iS >= 0 && i >= iS && i <= iE;
     const edge = inRange && (i === iS || i === iE);
     return el("button", {
-      class: "time" + (inRange ? " sel" : "") + (edge ? " edge" : ""), type: "button", disabled: !s.available,
-      "aria-pressed": inRange, title: s.available ? "" : "Bu saat dolu",
+      class: "time" + (inRange ? " sel" : "") + (edge ? " edge" : "") + (s.available ? "" : " taken") + (!s.available && s.bookingId === state.view ? " viewing" : ""),
+      type: "button", "aria-pressed": inRange,
+      title: s.available ? "" : "Dolu — kimin aldığını görmek için dokun",
       onclick: () => pickSlot(i),
     }, inRange ? "✓ " + s.time : s.time);
   });
@@ -100,11 +101,12 @@ function renderTime() {
   body.replaceChildren(
     el("div", { class: "card" },
       el("h2", { text: state.teacher.name + " — gün ve saat seç" }),
-      el("p", { class: "hint", text: `Bir saat aralığı seçebilirsin (en fazla ${MAX_MIN} dk). Önce başlangıç, sonra bitiş saatine dokun. Çizili saatler doludur.` }),
+      el("p", { class: "hint", text: `Bir saat aralığı seçebilirsin Önce başlangıç, sonra bitiş saatine dokun. Taralı saatler doludur; dokunursan randevuyu kimin aldığını görür, katılım isteği gönderebilirsin.` }),
       el("div", { class: "chips" }, ...chips),
       el("h3", { class: "day-head", text: fmtDate(state.date) + (free ? "" : " — bu gün tüm saatler dolu") }),
       el("div", { class: "times" }, ...times),
       selBar,
+      state.view ? bookingPanel(day) : null,
       el("div", { class: "row" }, back,
         el("button", { class: "btn", type: "button", disabled: !hasSel, onclick: stepForm }, "Devam →"))
     )
@@ -117,12 +119,13 @@ function pickSlot(i) {
   const iS = state.time ? slots.findIndex((s) => s.time === state.time) : -1;
   const iE = state.end ? slots.findIndex((s) => tmin(s.time) + step === tmin(state.end)) : -1;
   const single = iS >= 0 && iS === iE;
+  if (!slots[i].available) { state.view = slots[i].bookingId; state.joinDone = null; renderTime(); return; }
+  state.view = null;
   if (single && i > iS) {
-    // aralığı genişlet: aradaki tüm saatler boş ve süre sınırı içinde olmalı
+    // aralığı genişlet: aradaki tüm saatler boş olmalı
     const between = slots.slice(iS, i + 1);
     const contiguous = between.every((s, k) => s.available && (k === 0 || tmin(s.time) - tmin(between[k - 1].time) === step));
     if (!contiguous) { toast("Seçtiğin aralıkta dolu bir saat var."); }
-    else if ((i - iS + 1) * step > MAX_MIN) { toast(`Bir randevu en fazla ${MAX_MIN} dakika olabilir.`); }
     else { state.end = fromEnd(slots[i].time, step); renderTime(); return; }
     return;
   }
@@ -130,6 +133,49 @@ function pickSlot(i) {
   state.time = slots[i].time; state.end = fromEnd(slots[i].time, step);
   renderTime();
 }
+function bookingPanel(day) {
+  const bk = day.bookings.find((b) => b.id === state.view);
+  if (!bk) return null;
+  const parts = bk.participants.length
+    ? el("p", {}, el("strong", { text: "Katılanlar: " }), bk.participants.map((p) => `${p.name} (${p.studentClass})`).join(", "))
+    : null;
+  const box = el("div", { class: "card booking" },
+    el("h3", { style: "margin:0 0 6px", text: `Dolu: ${fmtRange(bk.time, bk.endTime)}` }),
+    el("p", { style: "margin:0" }, el("strong", { text: "Randevuyu alan: " }), `${bk.studentName} (${bk.studentClass}) `,
+      el("span", { class: "badge " + bk.status, text: STATUS[bk.status] })),
+    parts
+  );
+  if (bk.past) { box.append(el("p", { class: "hint", text: "Bu randevunun saati geçti." })); return box; }
+  if (state.joinDone && state.joinDone.id === bk.id) {
+    box.append(
+      el("p", { text: "Katılma isteğin öğretmene iletildi ✔ Onaylanırsa randevu bilgisi güncellenir. İstek kodun:" }),
+      el("div", { class: "code-box", text: state.joinDone.code }),
+      el("button", { class: "btn", type: "button", onclick: async () => { await askNotif(); showTab("mine"); } }, "Randevularım'a git"));
+    return box;
+  }
+  const err = el("div");
+  const name = el("input", { id: "j-name", maxlength: 60, autocomplete: "name", placeholder: "Ad Soyad" });
+  const cls = el("input", { id: "j-cls", maxlength: 20, placeholder: "Örn: 10-A" });
+  const reason = el("textarea", { id: "j-reason", maxlength: 500, placeholder: "Bu randevuya neden katılmak istiyorsun?" });
+  const btn = el("button", { class: "btn", type: "submit" }, "Katılma isteği gönder");
+  const form = el("form", { class: "joinform hidden", novalidate: true },
+    el("label", { for: "j-name", text: "Ad Soyad" }), name,
+    el("label", { for: "j-cls", text: "Sınıf" }), cls,
+    el("label", { for: "j-reason", text: "Katılma nedeni" }), reason, err,
+    el("div", { class: "row" }, btn));
+  form.addEventListener("submit", async (ev) => {
+    ev.preventDefault(); err.replaceChildren(); btn.disabled = true; btn.textContent = "Gönderiliyor…";
+    try {
+      const r = await api(`/api/appointments/${bk.id}/join`, { method: "POST", body: JSON.stringify({ name: name.value, studentClass: cls.value, reason: reason.value }) });
+      saveCode(r.code); state.joinDone = { id: bk.id, code: r.code }; renderTime();
+    } catch (e) { err.replaceChildren(el("div", { class: "err", text: e.message })); btn.disabled = false; btn.textContent = "Katılma isteği gönder"; }
+  });
+  box.append(
+    el("div", { class: "row" }, el("button", { class: "btn", type: "button", onclick: (ev) => { form.classList.remove("hidden"); ev.target.classList.add("hidden"); name.focus(); } }, "Bu randevuya katılma isteği gönder")),
+    form);
+  return box;
+}
+
 function fromEnd(t, step) {
   const m = tmin(t) + step;
   return String(Math.floor(m / 60)).padStart(2, "0") + ":" + String(m % 60).padStart(2, "0");
@@ -223,15 +269,20 @@ $("#notif-btn").onclick = askNotif;
 
 function apptCard(a, onCancel) {
   const active = a.status === "pending" || a.status === "approved";
+  const join = a.kind === "join";
   return el("div", { class: "appt " + a.status },
     el("div", { class: "top" },
-      el("strong", { text: `${a.teacherName} · ${fmtDate(a.date)} · ${fmtRange(a.time, a.endTime)}` }),
+      el("strong", { text: `${join ? "Katılım isteği · " : ""}${a.teacherName} · ${fmtDate(a.date)} · ${fmtRange(a.time, a.endTime)}` }),
       el("span", { class: "badge " + a.status, text: STATUS[a.status] })),
     el("div", { class: "meta", text: `${a.studentName} (${a.studentClass}) · Kod: ${a.code}` }),
+    join ? el("div", { class: "meta", text: `Randevu sahibi: ${a.ownerName} (${a.ownerClass})` }) : null,
     el("p", { text: a.reason }),
+    !join && a.participants && a.participants.length
+      ? el("div", { class: "note", text: "Katılanlar: " + a.participants.map((p) => `${p.name} (${p.studentClass})`).join(", ") }) : null,
+    !join && a.pendingJoinCount ? el("div", { class: "note", text: `${a.pendingJoinCount} katılım isteği öğretmen onayında.` }) : null,
     a.teacherNote ? el("div", { class: "note", text: "Öğretmen notu: " + a.teacherNote }) : null,
     active ? el("div", { class: "row", style: "margin-top:10px" },
-      el("button", { class: "btn ghost sm", type: "button", onclick: () => onCancel(a) }, "Randevuyu iptal et")) : null
+      el("button", { class: "btn ghost sm", type: "button", onclick: () => onCancel(a) }, join ? "İsteği geri çek" : "Randevuyu iptal et")) : null
   );
 }
 
@@ -275,7 +326,9 @@ async function poll() {
     const a = await api("/api/appointments/" + c).catch(() => null);
     if (!a) continue;
     if (seen[c] && seen[c] !== a.status && a.status !== "pending") {
-      if (a.status === "approved") notify("Randevun onaylandı ✔", `${a.teacherName} · ${fmtDate(a.date)} · ${fmtRange(a.time, a.endTime)}`);
+      if (a.status === "approved" && a.kind === "join") notify("Katılım isteğin onaylandı ✔", `${a.teacherName} · ${fmtDate(a.date)} · ${fmtRange(a.time, a.endTime)}`);
+      else if (a.status === "rejected" && a.kind === "join") notify("Katılım isteğin reddedildi", (a.teacherNote || "") + ` (${fmtRange(a.time, a.endTime)})`);
+      else if (a.status === "approved") notify("Randevun onaylandı ✔", `${a.teacherName} · ${fmtDate(a.date)} · ${fmtRange(a.time, a.endTime)}`);
       else if (a.status === "rejected") notify("Randevun reddedildi", (a.teacherNote || "Başka bir saat seçebilirsin.") + ` (${fmtRange(a.time, a.endTime)})`);
       changed = true;
     }

@@ -122,3 +122,9 @@ textarea { min-height: 96px; resize: vertical; }
 footer { text-align: center; color: var(--muted); font-size: .8rem; padding: 0 16px 28px; }
 .day-head { margin: 18px 0 8px; font-size: 1rem; color: var(--ink-2); }
 .empty { color: var(--muted); text-align: center; padding: 20px 0; }
+
+.time.taken { background: repeating-linear-gradient(45deg, #f0f0f3, #f0f0f3 6px, #e6e6ea 6px, #e6e6ea 12px); color: #6b6b73; }
+.time.taken:hover { border-color: var(--ink); }
+.time.viewing { border-color: var(--ink); box-shadow: 0 0 0 3px rgba(14,14,16,.2); font-weight: 700; }
+.booking { margin: 14px 0 0; background: #fafafb; border: 2px solid var(--ink); }
+.joinform { margin-top: 6px; }
