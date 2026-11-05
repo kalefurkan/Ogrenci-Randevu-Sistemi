@@ -3,6 +3,7 @@
 const SLOT_MINUTES = 15;      // Her randevunun süresi
 const HORIZON_DAYS = 14;      // Bugünden itibaren kaç gün ilerisi için randevu alınabilir
 const MAX_ACTIVE_PER_STUDENT = 2;
+const MAX_MINUTES = 60;       // Tek randevunun en uzun süresi
 
 // Gün numaraları: 0=Pazar, 1=Pazartesi ... 6=Cumartesi
 const TEACHERS = {
@@ -135,6 +136,7 @@ function publicView(r) {
     teacherName: TEACHERS[r.teacher]?.name,
     date: r.date,
     time: r.time,
+    endTime: r.end_time || fromMin(toMin(r.time) + SLOT_MINUTES),
     studentName: r.student_name,
     studentClass: r.student_class,
     reason: r.reason,
@@ -173,16 +175,17 @@ async function handle(request, env) {
     if (!TEACHERS[teacher]) throw new HttpError(400, "Öğretmen bulunamadı.");
     const dates = horizonDates();
     const { results } = await env.DB.prepare(
-      "SELECT date, time FROM appointments WHERE teacher = ? AND date >= ? AND date <= ? AND status IN ('pending','approved')"
+      "SELECT date, time, end_time FROM appointments WHERE teacher = ? AND date >= ? AND date <= ? AND status IN ('pending','approved')"
     ).bind(teacher, dates[0], dates[dates.length - 1]).all();
-    const taken = new Set(results.map((r) => r.date + " " + r.time));
     const days = [];
     for (const date of dates) {
       const slots = slotsFor(teacher, date);
       if (!slots.length) continue;
+      const booked = results.filter((r) => r.date === date);
+      const isTaken = (time) => booked.some((r) => r.time <= time && time < (r.end_time || fromMin(toMin(r.time) + SLOT_MINUTES)));
       const list = slots
         .filter((time) => !isPast(date, time))
-        .map((time) => ({ time, available: !taken.has(date + " " + time) }));
+        .map((time) => ({ time, available: !isTaken(time) }));
       if (list.length) days.push({ date, dayName: DAY_NAMES[dayOfWeek(date)], slots: list });
     }
     return json({ teacher, teacherName: TEACHERS[teacher].name, slotMinutes: SLOT_MINUTES, days }, 200, cors);
@@ -195,6 +198,7 @@ async function handle(request, env) {
     const teacher = clean(b.teacher, 20);
     const date = clean(b.date, 10);
     const time = clean(b.time, 5);
+    const endTime = clean(b.endTime, 5);
     const name = clean(b.name, 60);
     const cls = clean(b.studentClass, 20);
     const reason = clean(b.reason, 500);
@@ -203,8 +207,15 @@ async function handle(request, env) {
     if (name.split(" ").length < 2 || name.length < 5) throw new HttpError(400, "Lütfen ad ve soyadınızı eksiksiz yazın.");
     if (!cls) throw new HttpError(400, "Sınıf bilgisi zorunludur.");
     if (reason.length < 5) throw new HttpError(400, "Randevu nedenini kısaca yazın.");
-    if (!horizonDates().includes(date) || !slotsFor(teacher, date).includes(time) || isPast(date, time))
-      throw new HttpError(400, "Seçilen saat uygun değil.");
+    if (!horizonDates().includes(date) || isPast(date, time)) throw new HttpError(400, "Seçilen saat uygun değil.");
+    // Aralık: başlangıçtan bitişe kadar tüm 15 dk'lık dilimler öğretmenin çalışma saatinde olmalı
+    const daySlots = slotsFor(teacher, date);
+    const start = toMin(time), end = toMin(endTime || "99:99");
+    if (!/^\d\d:\d\d$/.test(time) || !/^\d\d:\d\d$/.test(endTime) || end <= start || (end - start) % SLOT_MINUTES !== 0)
+      throw new HttpError(400, "Saat aralığı geçersiz.");
+    if (end - start > MAX_MINUTES) throw new HttpError(400, "Bir randevu en fazla " + MAX_MINUTES + " dakika olabilir.");
+    for (let m = start; m < end; m += SLOT_MINUTES)
+      if (!daySlots.includes(fromMin(m))) throw new HttpError(400, "Seçilen saat aralığı öğretmenin çalışma saatleri dışında.");
 
     const same = await env.DB.prepare(
       "SELECT COUNT(*) AS n FROM appointments WHERE lower(student_name) = lower(?) AND lower(student_class) = lower(?) AND status IN ('pending','approved') AND date >= ?"
@@ -214,14 +225,23 @@ async function handle(request, env) {
 
     const now = new Date().toISOString();
     const code = newCode();
+    // Tek, atomik ifade: çakışan aktif randevu yoksa ekle
+    let res;
     try {
-      await env.DB.prepare(
-        "INSERT INTO appointments (id, code, teacher, date, time, student_name, student_class, reason, status, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?, 'pending', ?, ?)"
-      ).bind(crypto.randomUUID(), code, teacher, date, time, name, cls, reason, now, now).run();
+      res = await env.DB.prepare(
+        `INSERT INTO appointments (id, code, teacher, date, time, end_time, student_name, student_class, reason, status, created_at, updated_at)
+         SELECT ?,?,?,?,?,?,?,?,?, 'pending', ?, ?
+         WHERE NOT EXISTS (
+           SELECT 1 FROM appointments
+           WHERE teacher = ? AND date = ? AND status IN ('pending','approved') AND time < ? AND end_time > ?
+         )`
+      ).bind(crypto.randomUUID(), code, teacher, date, time, endTime, name, cls, reason, now, now,
+             teacher, date, endTime, time).run();
     } catch (e) {
-      if (String(e).includes("UNIQUE")) throw new HttpError(409, "Bu saat az önce başkası tarafından alındı. Lütfen başka bir saat seçin.");
-      throw e;
+      if (String(e).includes("UNIQUE")) res = { meta: { changes: 0 } };
+      else throw e;
     }
+    if (!res.meta.changes) throw new HttpError(409, "Seçtiğiniz aralıktaki bir saat az önce başkası tarafından alındı. Lütfen başka bir aralık seçin.");
     return json({ code }, 201, cors);
   }
 

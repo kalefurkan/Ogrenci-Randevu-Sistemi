@@ -37,6 +37,9 @@ function fmtDate(iso) {
   const dow = new Date(Date.UTC(y, m - 1, d)).getUTCDay();
   return `${d} ${MONTHS[m - 1]} ${y}, ${DAYS[dow]}`;
 }
+const tmin = (t) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
+const fmtRange = (a, b) => `${a} – ${b}`;
+const fmtDur = (a, b) => `${tmin(b) - tmin(a)} dk`;
 const STATUS = { pending: "Onay bekliyor", approved: "Onaylandı", rejected: "Reddedildi", cancelled: "İptal edildi" };
 
 function toast(msg, good) {

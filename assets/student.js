@@ -1,6 +1,7 @@
 // Öğrenci tarafı
 const $ = (s) => document.querySelector(s);
-const state = { schedule: null, teacher: null, avail: null, date: null, time: null };
+const state = { schedule: null, teacher: null, avail: null, date: null, time: null, end: null };
+const MAX_MIN = 60; // sunucudaki üst sınırla aynı
 
 /* ---------- sekmeler ---------- */
 function showTab(name) {
@@ -49,7 +50,7 @@ async function stepTeacher() {
 /* ---------- 2. gün ve saat ---------- */
 async function stepTime() {
   setStep(2);
-  state.date = null; state.time = null;
+  state.date = null; state.time = null; state.end = null;
   const body = $("#book-body");
   body.replaceChildren(el("div", { class: "empty", text: "Uygun saatler yükleniyor…" }));
   try {
@@ -73,29 +74,65 @@ function renderTime() {
     const [, m, dd] = d.date.split("-");
     return el("button", {
       class: "chip", type: "button", "aria-pressed": d.date === state.date,
-      onclick: () => { state.date = d.date; state.time = null; renderTime(); },
+      onclick: () => { state.date = d.date; state.time = null; state.end = null; renderTime(); },
     }, `${Number(dd)}.${m}`, el("small", { text: d.dayName }));
   });
-  const times = day.slots.map((s) =>
-    el("button", {
-      class: "time", type: "button", disabled: !s.available, "aria-pressed": state.time === s.time,
-      title: s.available ? "" : "Bu saat dolu",
-      onclick: () => { state.time = s.time; renderTime(); },
-    }, s.time)
-  );
+  const slots = day.slots;
+  const step = state.avail.slotMinutes;
+  const iS = state.time ? slots.findIndex((s) => s.time === state.time) : -1;
+  const iE = state.end ? slots.findIndex((s) => tmin(s.time) + step === tmin(state.end)) : -1;
+  const times = slots.map((s, i) => {
+    const inRange = iS >= 0 && i >= iS && i <= iE;
+    const edge = inRange && (i === iS || i === iE);
+    return el("button", {
+      class: "time" + (inRange ? " sel" : "") + (edge ? " edge" : ""), type: "button", disabled: !s.available,
+      "aria-pressed": inRange, title: s.available ? "" : "Bu saat dolu",
+      onclick: () => pickSlot(i),
+    }, inRange ? "✓ " + s.time : s.time);
+  });
+  const hasSel = iS >= 0 && iE >= iS;
+  const selBar = el("div", { class: "selbar" + (hasSel ? " on" : "") },
+    hasSel
+      ? [el("strong", { text: fmtRange(state.time, state.end) }), ` (${fmtDur(state.time, state.end)}) seçildi`]
+      : "Başlangıç saatine, sonra bitiş saatine dokun. Tek saat için sadece bir kez dokunman yeterli.");
   const free = day.slots.filter((s) => s.available).length;
 
   body.replaceChildren(
     el("div", { class: "card" },
       el("h2", { text: state.teacher.name + " — gün ve saat seç" }),
-      el("p", { class: "hint", text: `Her randevu ${state.avail.slotMinutes} dakikadır. Çizili saatler doludur.` }),
+      el("p", { class: "hint", text: `Bir saat aralığı seçebilirsin (en fazla ${MAX_MIN} dk). Önce başlangıç, sonra bitiş saatine dokun. Çizili saatler doludur.` }),
       el("div", { class: "chips" }, ...chips),
       el("h3", { class: "day-head", text: fmtDate(state.date) + (free ? "" : " — bu gün tüm saatler dolu") }),
       el("div", { class: "times" }, ...times),
+      selBar,
       el("div", { class: "row" }, back,
-        el("button", { class: "btn", type: "button", disabled: !state.time, onclick: stepForm }, "Devam →"))
+        el("button", { class: "btn", type: "button", disabled: !hasSel, onclick: stepForm }, "Devam →"))
     )
   );
+}
+
+function pickSlot(i) {
+  const slots = state.avail.days.find((d) => d.date === state.date).slots;
+  const step = state.avail.slotMinutes;
+  const iS = state.time ? slots.findIndex((s) => s.time === state.time) : -1;
+  const iE = state.end ? slots.findIndex((s) => tmin(s.time) + step === tmin(state.end)) : -1;
+  const single = iS >= 0 && iS === iE;
+  if (single && i > iS) {
+    // aralığı genişlet: aradaki tüm saatler boş ve süre sınırı içinde olmalı
+    const between = slots.slice(iS, i + 1);
+    const contiguous = between.every((s, k) => s.available && (k === 0 || tmin(s.time) - tmin(between[k - 1].time) === step));
+    if (!contiguous) { toast("Seçtiğin aralıkta dolu bir saat var."); }
+    else if ((i - iS + 1) * step > MAX_MIN) { toast(`Bir randevu en fazla ${MAX_MIN} dakika olabilir.`); }
+    else { state.end = fromEnd(slots[i].time, step); renderTime(); return; }
+    return;
+  }
+  // yeni başlangıç
+  state.time = slots[i].time; state.end = fromEnd(slots[i].time, step);
+  renderTime();
+}
+function fromEnd(t, step) {
+  const m = tmin(t) + step;
+  return String(Math.floor(m / 60)).padStart(2, "0") + ":" + String(m % 60).padStart(2, "0");
 }
 
 /* ---------- 3. bilgiler ---------- */
@@ -111,7 +148,7 @@ function stepForm() {
   const form = el("form", { class: "card", novalidate: true },
     el("h2", { text: "Bilgilerini gir" }),
     el("div", { class: "summary" },
-      el("strong", { text: state.teacher.name }), " · ", fmtDate(state.date), " · ", el("strong", { text: state.time })),
+      el("strong", { text: state.teacher.name }), " · ", fmtDate(state.date), " · ", el("strong", { text: fmtRange(state.time, state.end) })),
     el("label", { for: "f-name", text: "Ad Soyad" }), name,
     el("label", { for: "f-cls", text: "Sınıf" }), cls,
     el("label", { for: "f-reason", text: "Randevu nedeni" }), reason,
@@ -127,7 +164,7 @@ function stepForm() {
       const r = await api("/api/appointments", {
         method: "POST",
         body: JSON.stringify({
-          teacher: state.teacher.key, date: state.date, time: state.time,
+          teacher: state.teacher.key, date: state.date, time: state.time, endTime: state.end,
           name: name.value, studentClass: cls.value, reason: reason.value,
         }),
       });
@@ -148,7 +185,7 @@ function success(code) {
   $("#book-body").replaceChildren(
     el("div", { class: "card" },
       el("h2", { text: "Talebin alındı ✔" }),
-      el("p", { text: `${state.teacher.name} ile ${fmtDate(state.date)} saat ${state.time} için randevu talebin onay bekliyor.` }),
+      el("p", { text: `${state.teacher.name} ile ${fmtDate(state.date)} saat ${fmtRange(state.time, state.end)} için randevu talebin onay bekliyor.` }),
       el("p", { class: "hint", text: "Randevu kodun (not al!):" }),
       el("div", { class: "code-box", text: code }),
       el("p", { class: "hint", text: "Durumunu “Randevularım” sekmesinden takip edebilirsin. Onaylandığında bu sayfa açıksa bildirim gelir." }),
@@ -188,7 +225,7 @@ function apptCard(a, onCancel) {
   const active = a.status === "pending" || a.status === "approved";
   return el("div", { class: "appt " + a.status },
     el("div", { class: "top" },
-      el("strong", { text: `${a.teacherName} · ${fmtDate(a.date)} · ${a.time}` }),
+      el("strong", { text: `${a.teacherName} · ${fmtDate(a.date)} · ${fmtRange(a.time, a.endTime)}` }),
       el("span", { class: "badge " + a.status, text: STATUS[a.status] })),
     el("div", { class: "meta", text: `${a.studentName} (${a.studentClass}) · Kod: ${a.code}` }),
     el("p", { text: a.reason }),
@@ -238,8 +275,8 @@ async function poll() {
     const a = await api("/api/appointments/" + c).catch(() => null);
     if (!a) continue;
     if (seen[c] && seen[c] !== a.status && a.status !== "pending") {
-      if (a.status === "approved") notify("Randevun onaylandı ✔", `${a.teacherName} · ${fmtDate(a.date)} · ${a.time}`);
-      else if (a.status === "rejected") notify("Randevun reddedildi", (a.teacherNote || "Başka bir saat seçebilirsin.") + ` (${a.time})`);
+      if (a.status === "approved") notify("Randevun onaylandı ✔", `${a.teacherName} · ${fmtDate(a.date)} · ${fmtRange(a.time, a.endTime)}`);
+      else if (a.status === "rejected") notify("Randevun reddedildi", (a.teacherNote || "Başka bir saat seçebilirsin.") + ` (${fmtRange(a.time, a.endTime)})`);
       changed = true;
     }
     seen[c] = a.status;

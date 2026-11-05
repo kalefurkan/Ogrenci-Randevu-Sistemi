@@ -48,7 +48,7 @@ function card(a) {
   }
   return el("div", { class: "appt " + a.status },
     el("div", { class: "top" },
-      el("strong", { text: `${fmtDate(a.date)} · ${a.time}` }),
+      el("strong", { text: `${fmtDate(a.date)} · ${fmtRange(a.time, a.endTime)}` }),
       el("span", { class: "badge " + a.status, text: STATUS[a.status] })),
     el("div", { class: "meta", text: `${a.studentName} · ${a.studentClass}` }),
     el("p", { text: a.reason }),

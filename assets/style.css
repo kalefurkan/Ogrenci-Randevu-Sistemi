@@ -67,7 +67,11 @@ main { max-width: 860px; margin: 0 auto; padding: 18px 16px 60px; }
   font-variant-numeric: tabular-nums; cursor: pointer;
 }
 .time:hover:not(:disabled) { border-color: var(--red); }
-.time[aria-pressed="true"] { background: var(--red); border-color: var(--red); color: #fff; }
+.time.sel { background: #f9c9cb; border-color: var(--red); color: var(--red-dark); font-weight: 700; }
+.time.edge { background: var(--red); color: #fff; box-shadow: 0 0 0 3px rgba(212,20,28,.28); }
+.selbar { margin-top: 14px; padding: 10px 14px; border-radius: 10px; background: #f0f0f3; color: var(--muted); font-size: .95rem; }
+.selbar.on { background: #fdecec; color: var(--ink); border: 2px solid var(--red); }
+.selbar strong { color: var(--red-dark); font-size: 1.1rem; }
 .time:disabled { background: #f0f0f3; color: #b0b0b8; text-decoration: line-through; cursor: not-allowed; }
 
 label { display: block; font-weight: 600; margin: 12px 0 4px; }
