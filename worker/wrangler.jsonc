@@ -1,0 +1,18 @@
+{
+  "name": "falcons-randevu-api",
+  "main": "src/index.js",
+  "workers_dev": true,
+  "preview_urls": false,
+  "compatibility_date": "2026-10-01",
+  "vars": {
+    "ALLOWED_ORIGINS": "https://kalefurkan.github.io,http://localhost:8080,http://127.0.0.1:8080"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "falcons-randevu-db",
+      "database_id": "906f8535-28c1-4bf1-8da0-8e2b09407eb2",
+      "migrations_dir": "migrations"
+    }
+  ]
+}

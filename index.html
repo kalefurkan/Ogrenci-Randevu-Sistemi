@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Falcons Takımları Randevu Sistemi</title>
+<meta name="description" content="Falcons Robotik takımı öğretmenlerinden randevu alın.">
+<meta name="theme-color" content="#d4141c">
+<link rel="icon" href="assets/logo.jpg">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-in">
+    <img src="assets/logo.jpg" alt="The Falcons Robotics logosu">
+    <h1>Falcons Takımları Randevu Sistemi<small>Öğretmenlerimizle görüşmek için randevu alın</small></h1>
+  </div>
+</header>
+
+<main>
+  <div class="tabs" role="tablist">
+    <button class="tab" role="tab" id="tab-book" aria-selected="true">Randevu Al</button>
+    <button class="tab" role="tab" id="tab-mine" aria-selected="false">Randevularım</button>
+  </div>
+
+  <!-- RANDEVU AL -->
+  <section id="view-book">
+    <ol class="steps" id="steps">
+      <li>1. Öğretmen</li><li>2. Gün ve saat</li><li>3. Bilgiler</li>
+    </ol>
+    <div id="book-body"></div>
+  </section>
+
+  <!-- RANDEVULARIM -->
+  <section id="view-mine" class="hidden">
+    <div class="card">
+      <h2>Randevu kodunla sorgula</h2>
+      <p class="hint">Randevu alırken verilen 8 haneli kodu gir. Bu cihazdan aldığın randevular otomatik listelenir.</p>
+      <form id="lookup" class="row" style="margin-top:0">
+        <input id="lookup-code" maxlength="8" placeholder="Örn: K7QM2XP4" autocomplete="off" style="flex:1;min-width:160px;text-transform:uppercase" aria-label="Randevu kodu">
+        <button class="btn" type="submit">Sorgula</button>
+      </form>
+      <div id="lookup-err"></div>
+    </div>
+    <div id="mine-list"></div>
+    <div class="card" id="notif-card">
+      <h2>Bildirimler</h2>
+      <p class="hint">Randevun onaylandığında veya reddedildiğinde, bu sayfa açıkken sana bildirim gösterilir. Tarayıcı bildirimi için izin ver.</p>
+      <button class="btn ghost sm" id="notif-btn" type="button">Bildirimlere izin ver</button>
+    </div>
+  </section>
+</main>
+
+<footer>
+  Öğretmen girişi için <a href="teacher.html">tıklayın</a> · © The Falcons Robotics
+</footer>
+
+<script src="assets/config.js"></script>
+<script src="assets/common.js"></script>
+<script src="assets/student.js"></script>
+</body>
+</html>

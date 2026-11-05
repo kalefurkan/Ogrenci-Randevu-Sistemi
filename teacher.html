@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Öğretmen Paneli · Falcons Randevu</title>
+<meta name="theme-color" content="#d4141c">
+<link rel="icon" href="assets/logo.jpg">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-in">
+    <img src="assets/logo.jpg" alt="The Falcons Robotics logosu">
+    <h1>Öğretmen Paneli<small>Falcons Takımları Randevu Sistemi</small></h1>
+  </div>
+</header>
+<main>
+  <section id="login" class="card">
+    <h2>Giriş</h2>
+    <form id="login-form" novalidate>
+      <label for="l-teacher">Öğretmen</label>
+      <select id="l-teacher" style="width:100%;padding:11px 12px;border:2px solid var(--line);border-radius:10px;font:inherit">
+        <option value="furkan">Furkan KALE</option>
+        <option value="mustafa">Mustafa Demirkıran</option>
+      </select>
+      <label for="l-pass">Şifre</label>
+      <input id="l-pass" type="password" autocomplete="current-password" required>
+      <div id="l-err"></div>
+      <div class="row"><button class="btn" type="submit">Giriş yap</button><a href="index.html">← Öğrenci sayfası</a></div>
+    </form>
+  </section>
+
+  <section id="panel" class="hidden">
+    <div class="row" style="justify-content:space-between;margin:0 0 12px">
+      <strong id="who"></strong>
+      <span><button class="btn ghost sm" id="refresh" type="button">Yenile</button>
+      <button class="btn ghost sm" id="logout" type="button">Çıkış</button></span>
+    </div>
+    <div id="lists"></div>
+  </section>
+</main>
+<script src="assets/config.js"></script>
+<script src="assets/common.js"></script>
+<script src="assets/teacher.js"></script>
+</body>
+</html>
