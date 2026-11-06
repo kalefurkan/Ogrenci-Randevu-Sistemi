@@ -187,6 +187,7 @@ function stepForm() {
   const body = $("#book-body");
   const err = el("div");
   const name = el("input", { id: "f-name", required: true, maxlength: 60, autocomplete: "name", placeholder: "Ad Soyad" });
+  const email = el("input", { id: "f-email", type: "email", required: true, maxlength: 100, autocomplete: "email", placeholder: "ornek@eposta.com" });
   const cls = el("input", { id: "f-cls", required: true, maxlength: 20, placeholder: "Örn: 10-A" });
   const reason = el("textarea", { id: "f-reason", required: true, maxlength: 500, placeholder: "Randevuyu neden almak istiyorsun?" });
   const submit = el("button", { class: "btn", type: "submit" }, "Randevu talebini gönder");
@@ -197,6 +198,8 @@ function stepForm() {
       el("strong", { text: state.teacher.name }), " · ", fmtDate(state.date), " · ", el("strong", { text: fmtRange(state.time, state.end) })),
     el("label", { for: "f-name", text: "Ad Soyad" }), name,
     el("label", { for: "f-cls", text: "Sınıf" }), cls,
+    el("label", { for: "f-email", text: "E-posta adresi" }), email,
+    el("p", { class: "hint", style: "margin:4px 0 0", text: "Randevun onaylandığında bu adrese e-posta gelecek. Adresin yalnızca öğretmene gösterilir." }),
     el("label", { for: "f-reason", text: "Randevu nedeni" }), reason,
     err,
     el("div", { class: "row" },
@@ -211,7 +214,7 @@ function stepForm() {
         method: "POST",
         body: JSON.stringify({
           teacher: state.teacher.key, date: state.date, time: state.time, endTime: state.end,
-          name: name.value, studentClass: cls.value, reason: reason.value,
+          name: name.value, studentClass: cls.value, email: email.value, reason: reason.value,
         }),
       });
       saveCode(r.code);
@@ -234,7 +237,7 @@ function success(code) {
       el("p", { text: `${state.teacher.name} ile ${fmtDate(state.date)} saat ${fmtRange(state.time, state.end)} için randevu talebin onay bekliyor.` }),
       el("p", { class: "hint", text: "Randevu kodun (not al!):" }),
       el("div", { class: "code-box", text: code }),
-      el("p", { class: "hint", text: "Durumunu “Randevularım” sekmesinden takip edebilirsin. Onaylandığında bu sayfa açıksa bildirim gelir." }),
+      el("p", { class: "hint", text: "Talebin öğretmene e-postayla iletildi; onaylanınca e-posta adresine bilgi gelecek. Durumunu “Randevularım” sekmesinden takip edebilirsin. Onaylandığında bu sayfa açıksa bildirim gelir." }),
       el("div", { class: "row" },
         el("button", { class: "btn", type: "button", onclick: async () => { await askNotif(); showTab("mine"); } }, "Randevularım'a git"),
         el("button", { class: "btn ghost", type: "button", onclick: () => { $("#steps").classList.remove("hidden"); stepTeacher(); } }, "Yeni randevu"))

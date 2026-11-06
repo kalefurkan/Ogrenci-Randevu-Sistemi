@@ -25,8 +25,12 @@ const TEACHERS = {
   },
 };
 
+const MAIL_FROM = "Falcons Randevu <noreply@furkankale.com>";
+const PANEL_URL = "https://kalefurkan.github.io/Ogrenci-Randevu-Sistemi/teacher.html";
+const MONTHS = ["Ocak","Şubat","Mart","Nisan","Mayıs","Haziran","Temmuz","Ağustos","Eylül","Ekim","Kasım","Aralık"];
 const DAY_NAMES = ["Pazar", "Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartesi"];
 
+const trDate = (iso) => { const [y, m, d] = iso.split("-").map(Number); return `${d} ${MONTHS[m - 1]} ${y}, ${DAY_NAMES[dayOfWeek(iso)]}`; };
 const toMin = (t) => { const [h, m] = t.split(":").map(Number); return h * 60 + m; };
 const fromMin = (n) => String(Math.floor(n / 60)).padStart(2, "0") + ":" + String(n % 60).padStart(2, "0");
 
@@ -133,6 +137,14 @@ function newCode() {
   return Array.from(bytes, (b) => CODE_ALPHABET[b % CODE_ALPHABET.length]).join("");
 }
 
+async function sendMail(env, to, subject, text) {
+  if (!env.MAIL || !to) return;
+  try { const r = await env.MAIL.send({ to, from: MAIL_FROM, subject, text }); console.log("MAIL sonucu:", JSON.stringify(r)); }
+  catch (e) { console.error("E-posta gönderilemedi:", String(e)); }
+}
+const teacherEmail = (env, key) => (key === "furkan" ? env.FURKAN_EMAIL : key === "mustafa" ? env.MUSTAFA_EMAIL : null);
+const EMAIL_RE = /^[^\s@<>",;]+@[^\s@<>",;]+\.[^\s@<>",;]{2,}$/;
+
 const clean = (s, max) => String(s ?? "").replace(/\s+/g, " ").trim().slice(0, max);
 
 function publicView(r) {
@@ -153,7 +165,7 @@ function publicView(r) {
 }
 
 // ---------- uç noktalar ----------
-async function handle(request, env) {
+async function handle(request, env, ctx) {
   const url = new URL(request.url);
   const path = url.pathname.replace(/\/+$/, "");
   const method = request.method;
@@ -220,12 +232,14 @@ async function handle(request, env) {
     const time = clean(b.time, 5);
     const endTime = clean(b.endTime, 5);
     const name = clean(b.name, 60);
+    const email = clean(b.email, 100).toLowerCase();
     const cls = clean(b.studentClass, 20);
     const reason = clean(b.reason, 500);
 
     if (!TEACHERS[teacher]) throw new HttpError(400, "Öğretmen seçmelisiniz.");
     if (name.split(" ").length < 2 || name.length < 5) throw new HttpError(400, "Lütfen ad ve soyadınızı eksiksiz yazın.");
     if (!cls) throw new HttpError(400, "Sınıf bilgisi zorunludur.");
+    if (!EMAIL_RE.test(email)) throw new HttpError(400, "Geçerli bir e-posta adresi yazın.");
     if (reason.length < 5) throw new HttpError(400, "Randevu nedenini kısaca yazın.");
     if (!horizonDates().includes(date) || isPast(date, time)) throw new HttpError(400, "Seçilen saat uygun değil.");
     // Aralık: başlangıçtan bitişe kadar tüm 15 dk'lık dilimler öğretmenin çalışma saatinde olmalı
@@ -248,19 +262,35 @@ async function handle(request, env) {
     let res;
     try {
       res = await env.DB.prepare(
-        `INSERT INTO appointments (id, code, teacher, date, time, end_time, student_name, student_class, reason, status, created_at, updated_at)
-         SELECT ?,?,?,?,?,?,?,?,?, 'pending', ?, ?
+        `INSERT INTO appointments (id, code, teacher, date, time, end_time, student_name, student_class, reason, status, created_at, updated_at, student_email)
+         SELECT ?,?,?,?,?,?,?,?,?, 'pending', ?, ?, ?
          WHERE NOT EXISTS (
            SELECT 1 FROM appointments
            WHERE teacher = ? AND date = ? AND status IN ('pending','approved') AND time < ? AND end_time > ?
          )`
-      ).bind(crypto.randomUUID(), code, teacher, date, time, endTime, name, cls, reason, now, now,
+      ).bind(crypto.randomUUID(), code, teacher, date, time, endTime, name, cls, reason, now, now, email,
              teacher, date, endTime, time).run();
     } catch (e) {
       if (String(e).includes("UNIQUE")) res = { meta: { changes: 0 } };
       else throw e;
     }
     if (!res.meta.changes) throw new HttpError(409, "Seçtiğiniz aralıktaki bir saat az önce başkası tarafından alındı. Lütfen başka bir aralık seçin.");
+    ctx.waitUntil(sendMail(env, teacherEmail(env, teacher),
+      `Yeni randevu talebi: ${name} (${cls}) – ${trDate(date)} ${time}–${endTime}`,
+      `Merhaba ${TEACHERS[teacher].name},
+
+Yeni bir randevu talebi aldınız.
+
+Öğrenci : ${name} (${cls})
+E-posta : ${email}
+Tarih   : ${trDate(date)}
+Saat    : ${time} – ${endTime}
+Neden   : ${reason}
+
+Onaylamak veya reddetmek için öğretmen panelini açın:
+${PANEL_URL}
+
+Falcons Takımları Randevu Sistemi`));
     return json({ code }, 201, cors);
   }
 
@@ -385,7 +415,7 @@ async function handle(request, env) {
       "SELECT p.* FROM participants p JOIN appointments a ON a.id = p.appointment_id WHERE a.teacher = ? AND a.date >= ? ORDER BY p.created_at"
     ).bind(teacher, from).all();
     const appointments = results.map((r) => ({
-      ...publicView(r), id: r.id,
+      ...publicView(r), id: r.id, studentEmail: r.student_email || "",
       participants: pr.filter((p) => p.appointment_id === r.id).map((p) => ({
         id: p.id, name: p.student_name, studentClass: p.student_class, reason: p.reason, status: p.status, teacherNote: p.teacher_note || "",
       })),
@@ -412,6 +442,22 @@ async function handle(request, env) {
       ).bind(now, r.id));
     }
     await env.DB.batch(stmts);
+    if (status === "approved" && r.status !== "approved" && r.student_email) {
+      ctx.waitUntil(sendMail(env, r.student_email,
+        `Randevunuz onaylandı – ${trDate(r.date)} ${r.time}`,
+        `Merhaba ${r.student_name},
+
+${TEACHERS[teacher].name} randevu talebinizi onayladı.
+
+Öğretmen : ${TEACHERS[teacher].name}
+Tarih    : ${trDate(r.date)}
+Saat     : ${r.time} – ${r.end_time || fromMin(toMin(r.time) + SLOT_MINUTES)}
+${note ? "Öğretmen notu: " + note + "\n" : ""}
+Randevu kodunuz: ${r.code}
+Lütfen randevu saatinde hazır bulunun. Gelemeyecekseniz randevunuzu sitedeki "Randevularım" bölümünden iptal edin.
+
+Falcons Takımları Randevu Sistemi`));
+    }
     return json({ ok: true }, 200, cors);
   }
 
@@ -438,9 +484,9 @@ async function handle(request, env) {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     try {
-      return await handle(request, env);
+      return await handle(request, env, ctx);
     } catch (e) {
       const cors = corsHeaders(request, env);
       if (e instanceof HttpError) return json({ error: e.message }, e.status, cors);

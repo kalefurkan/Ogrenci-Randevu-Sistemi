@@ -100,7 +100,7 @@ function card(a) {
     el("div", { class: "top" },
       el("strong", { text: `${fmtDate(a.date)} · ${fmtRange(a.time, a.endTime)}` }),
       el("span", { class: "badge " + a.status, text: STATUS[a.status] })),
-    el("div", { class: "meta", text: `${a.studentName} · ${a.studentClass}` }),
+    el("div", { class: "meta", text: `${a.studentName} · ${a.studentClass}${a.studentEmail ? " · " + a.studentEmail : ""}` }),
     el("p", { text: a.reason }),
     a.teacherNote ? el("div", { class: "note", text: "Not: " + a.teacherNote }) : null,
     approved.length ? el("div", { class: "note" }, el("strong", { text: "Katılanlar: " }), approved.map((p) => `${p.name} (${p.studentClass})`).join(", ")) : null,
