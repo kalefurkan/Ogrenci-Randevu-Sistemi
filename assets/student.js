@@ -148,7 +148,7 @@ function bookingPanel(day) {
   if (bk.past) { box.append(el("p", { class: "hint", text: "Bu randevunun saati geçti." })); return box; }
   if (state.joinDone && state.joinDone.id === bk.id) {
     box.append(
-      el("p", { text: "Katılma isteğin öğretmene iletildi ✔ Onaylanırsa randevu bilgisi güncellenir. İstek kodun:" }),
+      el("p", { text: "Katılma isteğin öğretmene iletildi ✔ Öğretmene e-postayla iletildi; onay veya red sonucu e-posta adresine gelecek. İstek kodun:" }),
       el("div", { class: "code-box", text: state.joinDone.code }),
       el("button", { class: "btn", type: "button", onclick: async () => { await askNotif(); showTab("mine"); } }, "Randevularım'a git"));
     return box;
@@ -156,17 +156,19 @@ function bookingPanel(day) {
   const err = el("div");
   const name = el("input", { id: "j-name", maxlength: 60, autocomplete: "name", placeholder: "Ad Soyad" });
   const cls = el("input", { id: "j-cls", maxlength: 20, placeholder: "Örn: 10-A" });
+  const email = el("input", { id: "j-email", type: "email", maxlength: 100, autocomplete: "email", placeholder: "ornek@eposta.com" });
   const reason = el("textarea", { id: "j-reason", maxlength: 500, placeholder: "Bu randevuya neden katılmak istiyorsun?" });
   const btn = el("button", { class: "btn", type: "submit" }, "Katılma isteği gönder");
   const form = el("form", { class: "joinform hidden", novalidate: true },
     el("label", { for: "j-name", text: "Ad Soyad" }), name,
     el("label", { for: "j-cls", text: "Sınıf" }), cls,
+    el("label", { for: "j-email", text: "E-posta adresi" }), email,
     el("label", { for: "j-reason", text: "Katılma nedeni" }), reason, err,
     el("div", { class: "row" }, btn));
   form.addEventListener("submit", async (ev) => {
     ev.preventDefault(); err.replaceChildren(); btn.disabled = true; btn.textContent = "Gönderiliyor…";
     try {
-      const r = await api(`/api/appointments/${bk.id}/join`, { method: "POST", body: JSON.stringify({ name: name.value, studentClass: cls.value, reason: reason.value }) });
+      const r = await api(`/api/appointments/${bk.id}/join`, { method: "POST", body: JSON.stringify({ name: name.value, studentClass: cls.value, email: email.value, reason: reason.value }) });
       saveCode(r.code); state.joinDone = { id: bk.id, code: r.code }; renderTime();
     } catch (e) { err.replaceChildren(el("div", { class: "err", text: e.message })); btn.disabled = false; btn.textContent = "Katılma isteği gönder"; }
   });

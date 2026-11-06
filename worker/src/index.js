@@ -26,6 +26,7 @@ const TEACHERS = {
 };
 
 const MAIL_FROM = "Falcons Randevu <noreply@furkankale.com>";
+const SITE_URL = "https://kalefurkan.github.io/Ogrenci-Randevu-Sistemi/";
 const PANEL_URL = "https://kalefurkan.github.io/Ogrenci-Randevu-Sistemi/teacher.html";
 const MONTHS = ["Ocak","Şubat","Mart","Nisan","Mayıs","Haziran","Temmuz","Ağustos","Eylül","Ekim","Kasım","Aralık"];
 const DAY_NAMES = ["Pazar", "Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartesi"];
@@ -300,8 +301,10 @@ Falcons Takımları Randevu Sistemi`));
     let b;
     try { b = await request.json(); } catch { throw new HttpError(400, "Geçersiz istek."); }
     const name = clean(b.name, 60), cls = clean(b.studentClass, 20), reason = clean(b.reason, 500);
+    const email = clean(b.email, 100).toLowerCase();
     if (name.split(" ").length < 2 || name.length < 5) throw new HttpError(400, "Lütfen ad ve soyadınızı eksiksiz yazın.");
     if (!cls) throw new HttpError(400, "Sınıf bilgisi zorunludur.");
+    if (!EMAIL_RE.test(email)) throw new HttpError(400, "Geçerli bir e-posta adresi yazın.");
     if (reason.length < 5) throw new HttpError(400, "Katılma nedenini kısaca yazın.");
     const a = await env.DB.prepare("SELECT * FROM appointments WHERE id = ?").bind(m[1]).first();
     if (!a || !["pending", "approved"].includes(a.status)) throw new HttpError(404, "Bu randevu artık geçerli değil.");
@@ -315,8 +318,25 @@ Falcons Takımları Randevu Sistemi`));
     const now = new Date().toISOString();
     const code = newCode();
     await env.DB.prepare(
-      "INSERT INTO participants (id, code, appointment_id, student_name, student_class, reason, status, created_at, updated_at) VALUES (?,?,?,?,?,?, 'pending', ?, ?)"
-    ).bind(crypto.randomUUID(), code, a.id, name, cls, reason, now, now).run();
+      "INSERT INTO participants (id, code, appointment_id, student_name, student_class, reason, status, created_at, updated_at, student_email) VALUES (?,?,?,?,?,?, 'pending', ?, ?, ?)"
+    ).bind(crypto.randomUUID(), code, a.id, name, cls, reason, now, now, email).run();
+    ctx.waitUntil(sendMail(env, teacherEmail(env, a.teacher),
+      `Yeni katılım isteği: ${name} (${cls}) – ${trDate(a.date)} ${a.time}`,
+      `Merhaba ${TEACHERS[a.teacher].name},
+
+${a.student_name} (${a.student_class}) adlı öğrencinin randevusuna katılmak isteyen yeni bir öğrenci var.
+
+Katılmak isteyen : ${name} (${cls})
+E-posta          : ${email}
+Neden            : ${reason}
+
+Randevu          : ${trDate(a.date)}, ${a.time} – ${a.end_time || fromMin(toMin(a.time) + SLOT_MINUTES)}
+Randevu sahibi   : ${a.student_name} (${a.student_class})
+
+Onaylamak veya reddetmek için öğretmen panelini açın:
+${PANEL_URL}
+
+Falcons Takımları Randevu Sistemi`));
     return json({ code }, 201, cors);
   }
 
@@ -417,7 +437,7 @@ Falcons Takımları Randevu Sistemi`));
     const appointments = results.map((r) => ({
       ...publicView(r), id: r.id, studentEmail: r.student_email || "",
       participants: pr.filter((p) => p.appointment_id === r.id).map((p) => ({
-        id: p.id, name: p.student_name, studentClass: p.student_class, reason: p.reason, status: p.status, teacherNote: p.teacher_note || "",
+        id: p.id, name: p.student_name, studentClass: p.student_class, email: p.student_email || "", reason: p.reason, status: p.status, teacherNote: p.teacher_note || "",
       })),
     }));
     return json({ teacherName: TEACHERS[teacher].name, appointments }, 200, cors);
@@ -458,6 +478,18 @@ Lütfen randevu saatinde hazır bulunun. Gelemeyecekseniz randevunuzu sitedeki "
 
 Falcons Takımları Randevu Sistemi`));
     }
+    if (status === "rejected" && r.status !== "rejected" && r.student_email) {
+      ctx.waitUntil(sendMail(env, r.student_email,
+        `Randevu talebiniz reddedildi – ${trDate(r.date)} ${r.time}`,
+        `Merhaba ${r.student_name},
+
+${TEACHERS[teacher].name}, ${trDate(r.date)} ${r.time} – ${r.end_time || fromMin(toMin(r.time) + SLOT_MINUTES)} için yaptığınız randevu talebini maalesef kabul edemedi.
+${note ? "\nÖğretmen notu: " + note + "\n" : ""}
+Farklı bir gün veya saat için yeniden randevu talebinde bulunabilirsiniz:
+${SITE_URL}
+
+Falcons Takımları Randevu Sistemi`));
+    }
     return json({ ok: true }, 200, cors);
   }
 
@@ -471,12 +503,28 @@ Falcons Takımları Randevu Sistemi`));
     if (!["approved", "rejected", "cancelled"].includes(status)) throw new HttpError(400, "Geçersiz durum.");
     const note = clean(b.note, 300);
     const p = await env.DB.prepare(
-      "SELECT p.id, a.status AS appt_status FROM participants p JOIN appointments a ON a.id = p.appointment_id WHERE p.id = ? AND a.teacher = ?"
+      `SELECT p.id, p.code, p.status, p.student_name, p.student_email, a.status AS appt_status,
+              a.date, a.time, a.end_time, a.student_name AS owner_name, a.student_class AS owner_class
+       FROM participants p JOIN appointments a ON a.id = p.appointment_id WHERE p.id = ? AND a.teacher = ?`
     ).bind(m[1], teacher).first();
     if (!p) throw new HttpError(404, "İstek bulunamadı.");
     if (status === "approved" && !["pending", "approved"].includes(p.appt_status)) throw new HttpError(400, "Ana randevu geçerli değil.");
     await env.DB.prepare("UPDATE participants SET status = ?, teacher_note = ?, updated_at = ? WHERE id = ?")
       .bind(status, note || null, new Date().toISOString(), p.id).run();
+    if (p.student_email && p.status !== status && (status === "approved" || status === "rejected")) {
+      const range = `${trDate(p.date)}, ${p.time} – ${p.end_time || fromMin(toMin(p.time) + SLOT_MINUTES)}`;
+      const ok = status === "approved";
+      ctx.waitUntil(sendMail(env, p.student_email,
+        ok ? `Katılım isteğiniz onaylandı – ${trDate(p.date)} ${p.time}` : `Katılım isteğiniz reddedildi – ${trDate(p.date)} ${p.time}`,
+        `Merhaba ${p.student_name},
+
+${TEACHERS[teacher].name}, ${p.owner_name} (${p.owner_class}) adlı öğrencinin randevusuna katılım isteğinizi ${ok ? "onayladı" : "kabul edemedi"}.
+
+Öğretmen : ${TEACHERS[teacher].name}
+Randevu  : ${range}
+${note ? "Öğretmen notu: " + note + "\n" : ""}${ok ? `\nİstek kodunuz: ${p.code}\nLütfen randevu saatinde hazır bulunun.\n` : `\nFarklı bir saat için randevu alabilirsiniz:\n${SITE_URL}\n`}
+Falcons Takımları Randevu Sistemi`));
+    }
     return json({ ok: true }, 200, cors);
   }
 

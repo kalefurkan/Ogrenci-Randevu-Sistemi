@@ -79,7 +79,7 @@ function partRow(p) {
     btns.push(el("button", { class: "btn ghost sm", type: "button", onclick: () => actPart(p, "cancelled") }, "Çıkar"));
   }
   return el("div", { class: "note" },
-    el("strong", { text: `${p.name} (${p.studentClass}) ` }), el("span", { class: "badge " + p.status, text: STATUS[p.status] }),
+    el("strong", { text: `${p.name} (${p.studentClass}${p.email ? " · " + p.email : ""}) ` }), el("span", { class: "badge " + p.status, text: STATUS[p.status] }),
     el("div", { text: p.reason }),
     p.teacherNote ? el("div", { class: "meta", text: "Not: " + p.teacherNote }) : null,
     btns.length ? el("div", { class: "row", style: "margin-top:6px" }, ...btns) : null);
